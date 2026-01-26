@@ -478,6 +478,19 @@ pub async fn execute_attach_weaver(
 		args.weaver_id
 	);
 
+	// Log audit event
+	state.audit_service.log(
+		AuditLogBuilder::new(AuditEventType::WeaverAttached)
+			.actor(AuditUserId::new(current_user.user.id.into_inner()))
+			.resource("weaver", args.weaver_id.clone())
+			.details(json!({
+				"source": "mcp",
+				"pod_name": &weaver.pod_name,
+				"read_only": read_only,
+			}))
+			.build(),
+	);
+
 	let result_text = format!(
 		"Weaver {} connection info:\n\n\
 		Status: {:?}\n\
