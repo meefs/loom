@@ -70,7 +70,7 @@ Loom's integrated observability platform: analytics, crash tracking, cron monito
 | [health-check.md](./health-check.md) | [loom-server](../crates/loom-server/) | `/health` endpoint |
 | [retry-strategy.md](./retry-strategy.md) | [loom-http](../crates/loom-http/) | Exponential backoff |
 | [job-scheduler-system.md](./job-scheduler-system.md) | [loom-jobs](../crates/loom-jobs/) | Background job system |
-| [mcp-system.md](./mcp-system.md) | [loom-server](../crates/loom-server/) | MCP server endpoint for weaver provisioning |
+| [mcp-system.md](./mcp-system.md) | [loom-server](../crates/loom-server/) | MCP server with tools, resources, and prompts |
 
 ## Terminal UI (TUI)
 
