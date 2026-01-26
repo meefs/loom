@@ -12,9 +12,32 @@
 //! - Format: JSON-RPC 2.0
 //! - Version: MCP 2025-11-25
 //!
-//! ## Available Tools
+//! ## Capabilities
 //!
-//! - `create_weaver`: Create an ephemeral Kubernetes pod for code execution
+//! ### Tools
+//!
+//! - `create_weaver`: Create an ephemeral Kubernetes pod
+//! - `list_weavers`: List weavers owned by the user
+//! - `get_weaver`: Get details of a specific weaver
+//! - `delete_weaver`: Delete a weaver
+//! - `attach_weaver`: Get connection info for a weaver
+//!
+//! ### Resources
+//!
+//! - `loom://threads` - List conversation threads
+//! - `loom://threads/{id}` - Thread details with messages
+//! - `loom://repos` - List connected repositories
+//! - `loom://repos/{id}` - Repository details
+//! - `loom://weavers` - List active weavers
+//! - `loom://weavers/{id}` - Weaver details
+//!
+//! ### Prompts
+//!
+//! - `create-weaver`: Create weaver with recommended settings
+//! - `code-review`: Code review assistance
+//! - `debug-session`: Debugging session
+//! - `explain-code`: Code explanation
+//! - `write-tests`: Test generation
 //!
 //! ## Example Usage
 //!
@@ -36,24 +59,19 @@
 //! POST /mcp
 //! { "jsonrpc": "2.0", "method": "tools/list", "id": 2 }
 //!
-//! // Call create_weaver
+//! // List resources
 //! POST /mcp
-//! {
-//!   "jsonrpc": "2.0",
-//!   "method": "tools/call",
-//!   "params": {
-//!     "name": "create_weaver",
-//!     "arguments": {
-//!       "image": "python:3.12",
-//!       "org_id": "550e8400-e29b-41d4-a716-446655440000"
-//!     }
-//!   },
-//!   "id": 3
-//! }
+//! { "jsonrpc": "2.0", "method": "resources/list", "id": 3 }
+//!
+//! // List prompts
+//! POST /mcp
+//! { "jsonrpc": "2.0", "method": "prompts/list", "id": 4 }
 //! ```
 
 mod error;
 mod handler;
+mod prompts;
+mod resources;
 pub mod session;
 mod tools;
 mod types;

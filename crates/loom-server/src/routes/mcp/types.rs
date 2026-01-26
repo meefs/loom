@@ -136,12 +136,24 @@ pub struct ServerCapabilities {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub tools: Option<ToolsCapability>,
 	#[serde(skip_serializing_if = "Option::is_none")]
+	pub resources: Option<ResourcesCapability>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub prompts: Option<PromptsCapability>,
+	#[serde(skip_serializing_if = "Option::is_none")]
 	pub experimental: Option<HashMap<String, Value>>,
 }
 
 /// Tools capability marker.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ToolsCapability {}
+
+/// Resources capability marker.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ResourcesCapability {}
+
+/// Prompts capability marker.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PromptsCapability {}
 
 /// MCP initialize response result.
 #[derive(Debug, Clone, Serialize)]
@@ -158,6 +170,8 @@ impl Default for InitializeResult {
 			protocol_version: MCP_PROTOCOL_VERSION.to_string(),
 			capabilities: ServerCapabilities {
 				tools: Some(ToolsCapability {}),
+				resources: Some(ResourcesCapability {}),
+				prompts: Some(PromptsCapability {}),
 				experimental: None,
 			},
 			server_info: ServerInfo {
@@ -237,6 +251,171 @@ pub struct CreateWeaverArgs {
 	pub lifetime_hours: Option<u32>,
 	#[serde(default)]
 	pub tags: HashMap<String, String>,
+}
+
+/// Arguments for list_weavers tool.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ListWeaversArgs {
+	pub org_id: Option<String>,
+	pub status: Option<String>,
+	#[serde(default)]
+	pub tags: HashMap<String, String>,
+}
+
+/// Arguments for get_weaver tool.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GetWeaverArgs {
+	pub weaver_id: String,
+}
+
+/// Arguments for delete_weaver tool.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeleteWeaverArgs {
+	pub weaver_id: String,
+}
+
+/// Arguments for attach_weaver tool.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AttachWeaverArgs {
+	pub weaver_id: String,
+}
+
+// ============================================================================
+// Resource Types
+// ============================================================================
+
+/// MCP resource definition.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Resource {
+	pub uri: String,
+	pub name: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub description: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub mime_type: Option<String>,
+}
+
+/// MCP resource template definition.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceTemplate {
+	pub uri_template: String,
+	pub name: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub description: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub mime_type: Option<String>,
+}
+
+/// MCP resources/list response result.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResourcesListResult {
+	pub resources: Vec<Resource>,
+}
+
+/// MCP resources/templates/list response result.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceTemplatesListResult {
+	pub resource_templates: Vec<ResourceTemplate>,
+}
+
+/// MCP resources/read request params.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResourcesReadParams {
+	pub uri: String,
+}
+
+/// Resource content block.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ResourceContent {
+	Text {
+		text: String,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		mime_type: Option<String>,
+	},
+	Blob {
+		blob: String, // base64 encoded
+		#[serde(skip_serializing_if = "Option::is_none")]
+		mime_type: Option<String>,
+	},
+}
+
+/// MCP resources/read response result.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResourcesReadResult {
+	pub contents: Vec<ResourceContent>,
+}
+
+// ============================================================================
+// Prompt Types
+// ============================================================================
+
+/// MCP prompt argument definition.
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptArgument {
+	pub name: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub description: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub required: Option<bool>,
+}
+
+/// MCP prompt definition.
+#[derive(Debug, Clone, Serialize)]
+pub struct Prompt {
+	pub name: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub description: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub arguments: Option<Vec<PromptArgument>>,
+}
+
+/// MCP prompts/list response result.
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptsListResult {
+	pub prompts: Vec<Prompt>,
+}
+
+/// MCP prompts/get request params.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PromptsGetParams {
+	pub name: String,
+	#[serde(default)]
+	pub arguments: HashMap<String, String>,
+}
+
+/// Prompt message role.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PromptRole {
+	User,
+	Assistant,
+}
+
+/// Prompt message content.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum PromptContent {
+	Text { text: String },
+	Resource { resource: Resource },
+}
+
+/// Prompt message.
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptMessage {
+	pub role: PromptRole,
+	pub content: PromptContent,
+}
+
+/// MCP prompts/get response result.
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptsGetResult {
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub description: Option<String>,
+	pub messages: Vec<PromptMessage>,
 }
 
 #[cfg(test)]

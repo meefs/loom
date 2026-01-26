@@ -5,7 +5,7 @@
 
 use loom_server_audit::{AuditEventType, AuditLogBuilder, UserId as AuditUserId};
 use loom_server_auth::{CurrentUser, OrgId};
-use loom_server_weaver::{CreateWeaverRequest, ResourceSpec};
+use loom_server_weaver::{CreateWeaverRequest, ResourceSpec, Weaver, WeaverId};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -13,13 +13,22 @@ use crate::api::AppState;
 
 use super::{
 	error::McpError,
-	types::{CreateWeaverArgs, Tool, ToolsCallResult, ToolsListResult},
+	types::{
+		AttachWeaverArgs, CreateWeaverArgs, DeleteWeaverArgs, GetWeaverArgs, ListWeaversArgs,
+		Tool, ToolsCallResult, ToolsListResult,
+	},
 };
 
 /// Get the list of available tools.
 pub fn list_tools() -> ToolsListResult {
 	ToolsListResult {
-		tools: vec![create_weaver_tool()],
+		tools: vec![
+			create_weaver_tool(),
+			list_weavers_tool(),
+			get_weaver_tool(),
+			delete_weaver_tool(),
+			attach_weaver_tool(),
+		],
 	}
 }
 
@@ -65,6 +74,95 @@ fn create_weaver_tool() -> Tool {
 				}
 			},
 			"required": ["image", "org_id"]
+		}),
+	}
+}
+
+/// Get the list_weavers tool definition.
+fn list_weavers_tool() -> Tool {
+	Tool {
+		name: "list_weavers".to_string(),
+		description: "List weavers (ephemeral Kubernetes pods) owned by the current user. \
+			System admins can see all weavers."
+			.to_string(),
+		input_schema: json!({
+			"type": "object",
+			"properties": {
+				"org_id": {
+					"type": "string",
+					"description": "Filter by organization ID (optional)"
+				},
+				"status": {
+					"type": "string",
+					"enum": ["pending", "running", "succeeded", "failed", "terminating"],
+					"description": "Filter by weaver status (optional)"
+				},
+				"tags": {
+					"type": "object",
+					"additionalProperties": { "type": "string" },
+					"description": "Filter by tags (optional)"
+				}
+			}
+		}),
+	}
+}
+
+/// Get the get_weaver tool definition.
+fn get_weaver_tool() -> Tool {
+	Tool {
+		name: "get_weaver".to_string(),
+		description: "Get detailed information about a specific weaver including status, \
+			resource usage, and connection details."
+			.to_string(),
+		input_schema: json!({
+			"type": "object",
+			"properties": {
+				"weaver_id": {
+					"type": "string",
+					"description": "The unique identifier of the weaver"
+				}
+			},
+			"required": ["weaver_id"]
+		}),
+	}
+}
+
+/// Get the delete_weaver tool definition.
+fn delete_weaver_tool() -> Tool {
+	Tool {
+		name: "delete_weaver".to_string(),
+		description: "Delete a weaver and terminate its Kubernetes pod. \
+			Only the owner or system admins can delete a weaver."
+			.to_string(),
+		input_schema: json!({
+			"type": "object",
+			"properties": {
+				"weaver_id": {
+					"type": "string",
+					"description": "The unique identifier of the weaver to delete"
+				}
+			},
+			"required": ["weaver_id"]
+		}),
+	}
+}
+
+/// Get the attach_weaver tool definition.
+fn attach_weaver_tool() -> Tool {
+	Tool {
+		name: "attach_weaver".to_string(),
+		description: "Get connection information for attaching to a weaver's terminal. \
+			Returns the WebSocket URL and connection details."
+			.to_string(),
+		input_schema: json!({
+			"type": "object",
+			"properties": {
+				"weaver_id": {
+					"type": "string",
+					"description": "The unique identifier of the weaver to attach to"
+				}
+			},
+			"required": ["weaver_id"]
 		}),
 	}
 }
@@ -179,6 +277,235 @@ pub async fn execute_create_weaver(
 	Ok(ToolsCallResult::text(result_text))
 }
 
+/// Format a weaver for display.
+fn format_weaver(weaver: &Weaver) -> String {
+	format!(
+		"ID: {}\n\
+		Image: {}\n\
+		Status: {:?}\n\
+		Pod: {}\n\
+		Age: {:.1} hours\n\
+		Lifetime: {} hours\n\
+		Tags: {}",
+		weaver.id,
+		weaver.image,
+		weaver.status,
+		weaver.pod_name,
+		weaver.age_hours,
+		weaver.lifetime_hours,
+		if weaver.tags.is_empty() {
+			"(none)".to_string()
+		} else {
+			weaver
+				.tags
+				.iter()
+				.map(|(k, v)| format!("{}={}", k, v))
+				.collect::<Vec<_>>()
+				.join(", ")
+		}
+	)
+}
+
+/// Execute the list_weavers tool.
+pub async fn execute_list_weavers(
+	state: &AppState,
+	current_user: &CurrentUser,
+	args: ListWeaversArgs,
+) -> Result<ToolsCallResult, McpError> {
+	let provisioner = state.provisioner.as_ref().ok_or_else(|| {
+		McpError::Internal("Weaver provisioner not configured on this server".to_string())
+	})?;
+
+	// Build tag filter
+	let tag_filter = if args.tags.is_empty() {
+		None
+	} else {
+		Some(args.tags.clone())
+	};
+
+	// Get weavers based on user role
+	let weavers = if current_user.user.is_system_admin() || current_user.user.is_support() {
+		provisioner.list_weavers(tag_filter).await?
+	} else {
+		let user_id = current_user.user.id.to_string();
+		let all_weavers = provisioner.list_weavers_for_user(&user_id).await?;
+		if let Some(ref tags) = tag_filter {
+			all_weavers
+				.into_iter()
+				.filter(|w| tags.iter().all(|(k, v)| w.tags.get(k) == Some(v)))
+				.collect()
+		} else {
+			all_weavers
+		}
+	};
+
+	// Apply status filter
+	let weavers: Vec<Weaver> = if let Some(ref status) = args.status {
+		weavers
+			.into_iter()
+			.filter(|w| format!("{:?}", w.status).to_lowercase() == status.to_lowercase())
+			.collect()
+	} else {
+		weavers
+	};
+
+	if weavers.is_empty() {
+		return Ok(ToolsCallResult::text("No weavers found."));
+	}
+
+	let result_text = format!(
+		"Found {} weaver(s):\n\n{}",
+		weavers.len(),
+		weavers
+			.iter()
+			.map(|w| format!(
+				"- {} ({:?}) - {} [{:.1}h old]",
+				w.id, w.status, w.image, w.age_hours
+			))
+			.collect::<Vec<_>>()
+			.join("\n")
+	);
+
+	Ok(ToolsCallResult::text(result_text))
+}
+
+/// Execute the get_weaver tool.
+pub async fn execute_get_weaver(
+	state: &AppState,
+	current_user: &CurrentUser,
+	args: GetWeaverArgs,
+) -> Result<ToolsCallResult, McpError> {
+	let provisioner = state.provisioner.as_ref().ok_or_else(|| {
+		McpError::Internal("Weaver provisioner not configured on this server".to_string())
+	})?;
+
+	let weaver_id: WeaverId = args.weaver_id.parse().map_err(|_| {
+		McpError::InvalidParams(format!("Invalid weaver_id format: {}", args.weaver_id))
+	})?;
+
+	let weaver = provisioner.get_weaver(&weaver_id).await?;
+
+	// Check access
+	if !can_read_weaver(current_user, &weaver) {
+		return Err(McpError::Forbidden(
+			"You don't have access to this weaver".to_string(),
+		));
+	}
+
+	Ok(ToolsCallResult::text(format_weaver(&weaver)))
+}
+
+/// Execute the delete_weaver tool.
+pub async fn execute_delete_weaver(
+	state: &AppState,
+	current_user: &CurrentUser,
+	args: DeleteWeaverArgs,
+) -> Result<ToolsCallResult, McpError> {
+	let provisioner = state.provisioner.as_ref().ok_or_else(|| {
+		McpError::Internal("Weaver provisioner not configured on this server".to_string())
+	})?;
+
+	let weaver_id: WeaverId = args.weaver_id.parse().map_err(|_| {
+		McpError::InvalidParams(format!("Invalid weaver_id format: {}", args.weaver_id))
+	})?;
+
+	let weaver = provisioner.get_weaver(&weaver_id).await?;
+
+	// Check delete access (owner or admin only)
+	if !is_weaver_owner_or_admin(current_user, &weaver) {
+		return Err(McpError::Forbidden(
+			"Only the owner or system admin can delete this weaver".to_string(),
+		));
+	}
+
+	let actor_id = current_user.user.id.to_string();
+	tracing::info!(
+		weaver_id = %args.weaver_id,
+		actor_id = %actor_id,
+		source = "mcp",
+		"Deleting weaver via MCP"
+	);
+
+	provisioner.delete_weaver(&weaver_id).await?;
+
+	// Log audit event
+	state.audit_service.log(
+		AuditLogBuilder::new(AuditEventType::WeaverDeleted)
+			.actor(AuditUserId::new(current_user.user.id.into_inner()))
+			.resource("weaver", args.weaver_id.clone())
+			.details(json!({
+				"source": "mcp",
+				"pod_name": &weaver.pod_name,
+			}))
+			.build(),
+	);
+
+	Ok(ToolsCallResult::text(format!(
+		"Deleted weaver {}\n\nPod {} has been terminated.",
+		args.weaver_id, weaver.pod_name
+	)))
+}
+
+/// Execute the attach_weaver tool.
+pub async fn execute_attach_weaver(
+	state: &AppState,
+	current_user: &CurrentUser,
+	args: AttachWeaverArgs,
+) -> Result<ToolsCallResult, McpError> {
+	let provisioner = state.provisioner.as_ref().ok_or_else(|| {
+		McpError::Internal("Weaver provisioner not configured on this server".to_string())
+	})?;
+
+	let weaver_id: WeaverId = args.weaver_id.parse().map_err(|_| {
+		McpError::InvalidParams(format!("Invalid weaver_id format: {}", args.weaver_id))
+	})?;
+
+	let weaver = provisioner.get_weaver(&weaver_id).await?;
+
+	// Check access
+	if !can_read_weaver(current_user, &weaver) {
+		return Err(McpError::Forbidden(
+			"You don't have access to this weaver".to_string(),
+		));
+	}
+
+	let read_only = !is_weaver_owner_or_admin(current_user, &weaver);
+
+	// Build the WebSocket URL
+	let ws_url = format!(
+		"{}/api/weaver/{}/attach",
+		state.base_url.replace("http://", "ws://").replace("https://", "wss://"),
+		args.weaver_id
+	);
+
+	let result_text = format!(
+		"Weaver {} connection info:\n\n\
+		Status: {:?}\n\
+		WebSocket URL: {}\n\
+		Access: {}\n\n\
+		To attach, connect to the WebSocket URL with your authentication token.",
+		args.weaver_id,
+		weaver.status,
+		ws_url,
+		if read_only { "Read-only" } else { "Full access" }
+	);
+
+	Ok(ToolsCallResult::text(result_text))
+}
+
+/// Check if a user can read a weaver.
+fn can_read_weaver(current_user: &CurrentUser, weaver: &Weaver) -> bool {
+	current_user.user.is_system_admin()
+		|| current_user.user.is_support()
+		|| weaver.owner_user_id == current_user.user.id.to_string()
+}
+
+/// Check if a user is the owner or admin of a weaver.
+fn is_weaver_owner_or_admin(current_user: &CurrentUser, weaver: &Weaver) -> bool {
+	current_user.user.is_system_admin()
+		|| weaver.owner_user_id == current_user.user.id.to_string()
+}
+
 /// Execute a tool by name.
 pub async fn execute_tool(
 	state: &AppState,
@@ -196,6 +523,42 @@ pub async fn execute_tool(
 
 			execute_create_weaver(state, current_user, args).await
 		}
+		"list_weavers" => {
+			let args: ListWeaversArgs = arguments
+				.map(serde_json::from_value)
+				.transpose()
+				.map_err(|e| McpError::InvalidParams(format!("Invalid list_weavers arguments: {e}")))?
+				.unwrap_or_default();
+
+			execute_list_weavers(state, current_user, args).await
+		}
+		"get_weaver" => {
+			let args: GetWeaverArgs = arguments
+				.map(serde_json::from_value)
+				.transpose()
+				.map_err(|e| McpError::InvalidParams(format!("Invalid get_weaver arguments: {e}")))?
+				.ok_or_else(|| McpError::InvalidParams("get_weaver requires arguments".to_string()))?;
+
+			execute_get_weaver(state, current_user, args).await
+		}
+		"delete_weaver" => {
+			let args: DeleteWeaverArgs = arguments
+				.map(serde_json::from_value)
+				.transpose()
+				.map_err(|e| McpError::InvalidParams(format!("Invalid delete_weaver arguments: {e}")))?
+				.ok_or_else(|| McpError::InvalidParams("delete_weaver requires arguments".to_string()))?;
+
+			execute_delete_weaver(state, current_user, args).await
+		}
+		"attach_weaver" => {
+			let args: AttachWeaverArgs = arguments
+				.map(serde_json::from_value)
+				.transpose()
+				.map_err(|e| McpError::InvalidParams(format!("Invalid attach_weaver arguments: {e}")))?
+				.ok_or_else(|| McpError::InvalidParams("attach_weaver requires arguments".to_string()))?;
+
+			execute_attach_weaver(state, current_user, args).await
+		}
 		_ => Err(McpError::ToolNotFound(name.to_string())),
 	}
 }
@@ -207,8 +570,13 @@ mod tests {
 	#[test]
 	fn test_list_tools() {
 		let result = list_tools();
-		assert_eq!(result.tools.len(), 1);
-		assert_eq!(result.tools[0].name, "create_weaver");
+		assert_eq!(result.tools.len(), 5);
+		let tool_names: Vec<&str> = result.tools.iter().map(|t| t.name.as_str()).collect();
+		assert!(tool_names.contains(&"create_weaver"));
+		assert!(tool_names.contains(&"list_weavers"));
+		assert!(tool_names.contains(&"get_weaver"));
+		assert!(tool_names.contains(&"delete_weaver"));
+		assert!(tool_names.contains(&"attach_weaver"));
 	}
 
 	#[test]

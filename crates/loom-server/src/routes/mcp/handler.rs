@@ -15,10 +15,10 @@ use crate::{api::AppState, auth_middleware::RequireAuth};
 
 use super::{
 	error::{McpError, McpErrorResponse},
-	tools,
+	prompts, resources, tools,
 	types::{
-		InitializeParams, InitializeResult, JsonRpcRequest, JsonRpcResponse, ToolsCallParams,
-		ToolsListResult, JSONRPC_VERSION,
+		InitializeParams, InitializeResult, JsonRpcRequest, JsonRpcResponse, PromptsGetParams,
+		ResourcesReadParams, ToolsCallParams, ToolsListResult, JSONRPC_VERSION,
 	},
 };
 
@@ -94,6 +94,11 @@ async fn route_method(
 		"notifications/initialized" => handle_initialized_notification(request),
 		"tools/list" => handle_tools_list(request),
 		"tools/call" => handle_tools_call(state, current_user, request).await,
+		"resources/list" => handle_resources_list(state, current_user, request).await,
+		"resources/read" => handle_resources_read(state, current_user, request).await,
+		"resources/templates/list" => handle_resource_templates_list(request),
+		"prompts/list" => handle_prompts_list(request),
+		"prompts/get" => handle_prompts_get(request),
 		"ping" => handle_ping(request),
 		_ => Err(McpError::MethodNotFound(request.method.clone())),
 	}
@@ -218,6 +223,87 @@ async fn handle_tools_call(
 /// Handle the ping method (for connection testing).
 fn handle_ping(request: &JsonRpcRequest) -> Result<(JsonRpcResponse, Option<String>), McpError> {
 	let response = JsonRpcResponse::success(request.id.clone(), json!({}));
+	Ok((response, None))
+}
+
+/// Handle the resources/list method.
+async fn handle_resources_list(
+	state: &AppState,
+	current_user: &loom_server_auth::CurrentUser,
+	request: &JsonRpcRequest,
+) -> Result<(JsonRpcResponse, Option<String>), McpError> {
+	tracing::info!(
+		user_id = %current_user.user.id,
+		"MCP resources/list request"
+	);
+
+	let result = resources::list_resources(state, current_user).await?;
+	let response = JsonRpcResponse::success(request.id.clone(), serde_json::to_value(result)?);
+	Ok((response, None))
+}
+
+/// Handle the resources/read method.
+async fn handle_resources_read(
+	state: &AppState,
+	current_user: &loom_server_auth::CurrentUser,
+	request: &JsonRpcRequest,
+) -> Result<(JsonRpcResponse, Option<String>), McpError> {
+	let params: ResourcesReadParams = request
+		.params
+		.as_ref()
+		.map(|v| serde_json::from_value(v.clone()))
+		.transpose()
+		.map_err(|e| McpError::InvalidParams(format!("Invalid resources/read params: {e}")))?
+		.ok_or_else(|| McpError::InvalidParams("resources/read requires params".to_string()))?;
+
+	tracing::info!(
+		uri = %params.uri,
+		user_id = %current_user.user.id,
+		"MCP resources/read request"
+	);
+
+	let result = resources::read_resource(state, current_user, &params.uri).await?;
+	let response = JsonRpcResponse::success(request.id.clone(), serde_json::to_value(result)?);
+	Ok((response, None))
+}
+
+/// Handle the resources/templates/list method.
+fn handle_resource_templates_list(
+	request: &JsonRpcRequest,
+) -> Result<(JsonRpcResponse, Option<String>), McpError> {
+	let result = resources::list_resource_templates();
+	let response = JsonRpcResponse::success(request.id.clone(), serde_json::to_value(result)?);
+	Ok((response, None))
+}
+
+/// Handle the prompts/list method.
+fn handle_prompts_list(
+	request: &JsonRpcRequest,
+) -> Result<(JsonRpcResponse, Option<String>), McpError> {
+	let result = prompts::list_prompts();
+	let response = JsonRpcResponse::success(request.id.clone(), serde_json::to_value(result)?);
+	Ok((response, None))
+}
+
+/// Handle the prompts/get method.
+fn handle_prompts_get(
+	request: &JsonRpcRequest,
+) -> Result<(JsonRpcResponse, Option<String>), McpError> {
+	let params: PromptsGetParams = request
+		.params
+		.as_ref()
+		.map(|v| serde_json::from_value(v.clone()))
+		.transpose()
+		.map_err(|e| McpError::InvalidParams(format!("Invalid prompts/get params: {e}")))?
+		.ok_or_else(|| McpError::InvalidParams("prompts/get requires params".to_string()))?;
+
+	tracing::info!(
+		prompt_name = %params.name,
+		"MCP prompts/get request"
+	);
+
+	let result = prompts::get_prompt(&params.name, &params.arguments)?;
+	let response = JsonRpcResponse::success(request.id.clone(), serde_json::to_value(result)?);
 	Ok((response, None))
 }
 
